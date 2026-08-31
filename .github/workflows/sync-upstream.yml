@@ -1,17 +1,17 @@
-name: Sync Upstream (Fork Synchronization)
+name: Sync Upstream & Safe Auto-Deploy OmniRoute
 
 on:
   schedule:
     # Exécution quotidienne à 04:00 UTC (06:00 heure de Paris)
     - cron: '0 4 * * *'
-  workflow_dispatch: # Permet le déclenchement manuel en 1 clic depuis l'onglet Actions de GitHub
+  workflow_dispatch: # Permet le déclenchement manuel en 1 clic depuis l'onglet Actions
 
 permissions:
   contents: write
 
 jobs:
-  sync:
-    name: Synchronize Fork with Upstream
+  sync-and-deploy:
+    name: Synchronize Upstream & Deploy OmniRoute
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Fork Repository
@@ -31,24 +31,63 @@ jobs:
           git fetch upstream --tags
 
       - name: Sync Active Release Branch (release/v3.8.51)
+        id: sync_release
         run: |
           if git ls-remote --exit-code --heads upstream release/v3.8.51 > /dev/null 2>&1; then
-            echo "Fetching and syncing release/v3.8.51..."
+            echo "Fetching upstream release/v3.8.51..."
             git checkout release/v3.8.51 || git checkout -b release/v3.8.51 origin/release/v3.8.51
             git fetch upstream release/v3.8.51
-            git merge --ff-only upstream/release/v3.8.51 || git merge upstream/release/v3.8.51 -m "chore(sync): automated sync from upstream release/v3.8.51"
-            git push origin release/v3.8.51
+            
+            LOCAL_REV=$(git rev-parse HEAD)
+            UPSTREAM_REV=$(git rev-parse upstream/release/v3.8.51)
+            
+            if [ "$LOCAL_REV" != "$UPSTREAM_REV" ]; then
+              echo "New upstream changes detected ($LOCAL_REV -> $UPSTREAM_REV). Merging..."
+              git merge --ff-only upstream/release/v3.8.51 || git merge upstream/release/v3.8.51 -m "chore(sync): automated sync from upstream release/v3.8.51"
+              git push origin release/v3.8.51
+              echo "synced=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "Branch release/v3.8.51 is already up-to-date. No new changes."
+              echo "synced=false" >> "$GITHUB_OUTPUT"
+            fi
           else
             echo "Branch release/v3.8.51 not found upstream, skipping."
+            echo "synced=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Sync Main / Master Branch
+      - name: Sync Default Branch (main/master)
         run: |
           DEFAULT_BRANCH=$(git remote show upstream | grep 'HEAD branch' | cut -d' ' -f5 || echo "main")
           echo "Upstream default branch is $DEFAULT_BRANCH"
           if git ls-remote --exit-code --heads upstream $DEFAULT_BRANCH > /dev/null 2>&1; then
             git checkout $DEFAULT_BRANCH || git checkout -b $DEFAULT_BRANCH origin/$DEFAULT_BRANCH || true
             git fetch upstream $DEFAULT_BRANCH
-            git merge --ff-only upstream/$DEFAULT_BRANCH || git merge upstream/$DEFAULT_BRANCH -m "chore(sync): automated sync from upstream $DEFAULT_BRANCH" || true
-            git push origin $DEFAULT_BRANCH || true
+            LOCAL_REV=$(git rev-parse HEAD || echo "none")
+            UPSTREAM_REV=$(git rev-parse upstream/$DEFAULT_BRANCH || echo "none")
+            if [ "$LOCAL_REV" != "$UPSTREAM_REV" ]; then
+              git merge --ff-only upstream/$DEFAULT_BRANCH || git merge upstream/$DEFAULT_BRANCH -m "chore(sync): automated sync from upstream $DEFAULT_BRANCH" || true
+              git push origin $DEFAULT_BRANCH || true
+            fi
+          fi
+
+      - name: Trigger Coolify Deployment for OmniRoute
+        if: steps.sync_release.outputs.synced == 'true'
+        run: |
+          echo "=== NOUVELLE MISE A JOUR DETECTEE : DECLENCHEMENT DU DEPLOIEMENT COOLIFY ==="
+          APP_UUID="qmusbfbjcz0ohip348rv8fgc"
+          COOLIFY_HOST="https://coolify.workspacegroupefloteuil.eu"
+          
+          if [ -n "${{ secrets.COOLIFY_API_TOKEN }}" ]; then
+            echo "Triggering deployment via Coolify API Token for app UUID $APP_UUID..."
+            RESPONSE=$(curl -s -w "\nHTTP_STATUS:%{http_code}" -X POST "$COOLIFY_HOST/api/v1/deploy?uuid=$APP_UUID" \
+              -H "Authorization: Bearer ${{ secrets.COOLIFY_API_TOKEN }}" \
+              -H "Content-Type: application/json")
+            echo "Coolify response: $RESPONSE"
+          elif [ -n "${{ secrets.COOLIFY_DEPLOY_WEBHOOK }}" ]; then
+            echo "Triggering deployment via Coolify Webhook..."
+            RESPONSE=$(curl -s -w "\nHTTP_STATUS:%{http_code}" -X POST "${{ secrets.COOLIFY_DEPLOY_WEBHOOK }}")
+            echo "Coolify response: $RESPONSE"
+          else
+            echo "INFO: Pour activer le déclenchement automatique sur Coolify lors des syncs,"
+            echo "ajoutez le secret COOLIFY_API_TOKEN ou COOLIFY_DEPLOY_WEBHOOK dans les paramètres GitHub Actions du dépôt."
           fi
