@@ -1,0 +1,54 @@
+name: Sync Upstream (Fork Synchronization)
+
+on:
+  schedule:
+    # Exécution quotidienne à 04:00 UTC (06:00 heure de Paris)
+    - cron: '0 4 * * *'
+  workflow_dispatch: # Permet le déclenchement manuel en 1 clic depuis l'onglet Actions de GitHub
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    name: Synchronize Fork with Upstream
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Fork Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure Git Identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Add Upstream Remote
+        run: |
+          git remote add upstream https://github.com/diegosouzapw/OmniRoute.git || git remote set-url upstream https://github.com/diegosouzapw/OmniRoute.git
+          git fetch upstream --tags
+
+      - name: Sync Active Release Branch (release/v3.8.51)
+        run: |
+          if git ls-remote --exit-code --heads upstream release/v3.8.51 > /dev/null 2>&1; then
+            echo "Fetching and syncing release/v3.8.51..."
+            git checkout release/v3.8.51 || git checkout -b release/v3.8.51 origin/release/v3.8.51
+            git fetch upstream release/v3.8.51
+            git merge --ff-only upstream/release/v3.8.51 || git merge upstream/release/v3.8.51 -m "chore(sync): automated sync from upstream release/v3.8.51"
+            git push origin release/v3.8.51
+          else
+            echo "Branch release/v3.8.51 not found upstream, skipping."
+          fi
+
+      - name: Sync Main / Master Branch
+        run: |
+          DEFAULT_BRANCH=$(git remote show upstream | grep 'HEAD branch' | cut -d' ' -f5 || echo "main")
+          echo "Upstream default branch is $DEFAULT_BRANCH"
+          if git ls-remote --exit-code --heads upstream $DEFAULT_BRANCH > /dev/null 2>&1; then
+            git checkout $DEFAULT_BRANCH || git checkout -b $DEFAULT_BRANCH origin/$DEFAULT_BRANCH || true
+            git fetch upstream $DEFAULT_BRANCH
+            git merge --ff-only upstream/$DEFAULT_BRANCH || git merge upstream/$DEFAULT_BRANCH -m "chore(sync): automated sync from upstream $DEFAULT_BRANCH" || true
+            git push origin $DEFAULT_BRANCH || true
+          fi
