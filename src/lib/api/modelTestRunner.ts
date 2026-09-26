@@ -285,12 +285,15 @@ export function detectTestKind(modelStr: string, customModel: any, nodeApiType?:
     !isRerank &&
     (apiFormat === "embeddings" ||
       nodeType === "embeddings" ||
+      customModel?.modelType === "embedding" ||
       supportedEndpoints.includes("embeddings") ||
       lowerModel.includes("embedding") ||
       lowerModel.includes("bge-") ||
       lowerModel.includes("text-embed") ||
       lowerModel.includes("jina-clip") ||
-      lowerModel.includes("colbert"));
+      lowerModel.includes("colbert") ||
+      lowerModel.includes("harrier-") ||
+      lowerModel.includes("nomic-embed"));
   // A Responses node answers on /v1/responses only. Without this the model fell
   // through to the chat branch below, which posts a Chat Completions body to
   // /v1/chat/completions: the route can still answer 200 while carrying nothing a
@@ -488,6 +491,10 @@ export async function runSingleModelTest(
       modelId: fullModelStr,
       status: "error",
       latencyMs: 0,
+      // 422, not the 409 the managed-lease return above uses: the request is valid, but this
+      // model's modality cannot be exercised by a chat test. The route passes httpStatus
+      // straight to NextResponse — omitting it made Next answer 200 for a skipped test.
+      httpStatus: 422,
       error:
         "Skipped: non-chat generation model (images/music/video) — use the corresponding generation endpoint instead",
     };
