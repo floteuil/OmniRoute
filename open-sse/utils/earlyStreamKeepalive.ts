@@ -338,7 +338,28 @@ export function withDeadlineSignal(request: Request): {
   // admission rebuilds, which both copy headers but mint new signal objects.
   const token = `dl-${Date.now().toString(36)}-${(deadlineTokenSeq += 1)}`;
   headers.set(DEADLINE_TOKEN_HEADER, token);
-  const wrappedReq = new Request(request, { signal: combined, headers });
+  let wrappedReq: Request;
+  try {
+    wrappedReq = new Request(request, { signal: combined, headers });
+  } catch {
+    // When request is a NextRequest or foreign Request subclass whose private fields (#state)
+    // cannot be read across boundaries by the Undici Request constructor, preserve request directly.
+    try {
+      request.headers.set(DEADLINE_TOKEN_HEADER, token);
+    } catch {
+      /* immutable headers fallback */
+    }
+    try {
+      Object.defineProperty(request, "signal", {
+        value: combined,
+        configurable: true,
+        writable: true,
+      });
+    } catch {
+      /* ignore if signal property is non-configurable */
+    }
+    wrappedReq = request;
+  }
   deadlineControllers.set(combined, deadlineController);
   deadlineControllersByToken.set(token, new WeakRef(deadlineController));
   deadlineTokenByController.set(deadlineController, token);
