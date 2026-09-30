@@ -692,3 +692,24 @@ test("deadline token registry returns to its original size after N requests", as
     "a released token must not resolve through the header fallback"
   );
 });
+
+test("withDeadlineSignal handles foreign Request or NextRequest subclasses safely without throwing private member errors", () => {
+  class ForeignRequest extends Request {
+    get destination() {
+      return "" as RequestDestination;
+    }
+  }
+  const foreignReq = new ForeignRequest("http://localhost/v1/chat/completions", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ model: "test" }),
+  });
+
+  const { wrappedReq, deadlineController } = withDeadlineSignal(foreignReq);
+  assert.ok(wrappedReq);
+  assert.ok(deadlineController);
+  assert.equal(deadlineController.signal.aborted, false);
+  assert.ok(wrappedReq.signal);
+  assert.ok(wrappedReq.headers.get("x-omniroute-deadline-token"));
+});
+
